@@ -1,0 +1,65 @@
+# Environment variables - NEVER commit these!
+.env
+.env.*
+!.env.example
+!.env.example.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build outputs
+build/
+dist/
+.next/
+out/
+
+# Uploads and outputs (user-generated content)
+**/uploads/
+**/outputs/
+**/table_images/
+**/ocr_text_output/
+
+# But keep directory structure
+!**/uploads/.gitkeep
+!**/outputs/.gitkeep
+

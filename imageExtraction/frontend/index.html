@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grid-Based PDF Voter Data Extraction Tool</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <!-- PDF.js from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1>
+                    <svg class="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                    </svg>
+                    Voter Data Extraction Tool
+                </h1>
+                <p class="header-subtitle">Grid-Based PDF Processing with Vertical Extraction</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Sidebar Controls -->
+            <aside class="sidebar">
+                <div class="sidebar-section">
+                    <h2 class="section-title">
+                        <span class="step-number">1</span>
+                        Upload PDF
+                    </h2>
+                    <div class="upload-area" id="uploadArea">
+                        <input type="file" id="pdfInput" accept="application/pdf" hidden>
+                        <label for="pdfInput" class="upload-label">
+                            <svg class="upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                            </svg>
+                            <span>Choose PDF File</span>
+                            <small>or drag and drop</small>
+                        </label>
+                    </div>
+                    <div id="fileInfo" class="file-info hidden"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h2 class="section-title">
+                        <span class="step-number">2</span>
+                        Page Settings
+                    </h2>
+                    <div class="form-group">
+                        <label>Skip Pages from Start</label>
+                        <input type="number" id="skipPagesStart" value="0" min="0" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label>Skip Pages from End</label>
+                        <input type="number" id="skipPagesEnd" value="0" min="0" class="input-field">
+                    </div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h2 class="section-title">
+                        <span class="step-number">3</span>
+                        Header/Footer
+                    </h2>
+                    <div class="form-group">
+                        <label>Header Height (px)</label>
+                        <input type="number" id="skipHeaderHeight" value="80" min="0" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label>Footer Height (px)</label>
+                        <input type="number" id="skipFooterHeight" value="60" min="0" class="input-field">
+                    </div>
+                    <button class="btn btn-secondary" id="btnShowSkipZones">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                        Preview Skip Zones
+                    </button>
+                </div>
+
+                <div class="sidebar-section">
+                    <h2 class="section-title">
+                        <span class="step-number">4</span>
+                        Grid Configuration
+                    </h2>
+                    <div class="form-group">
+                        <label>Rows</label>
+                        <input type="number" id="gridRows" value="9" min="1" max="15" class="input-field">
+                    </div>
+                    <div class="form-group">
+                        <label>Columns</label>
+                        <input type="number" id="gridColumns" value="3" min="1" max="5" class="input-field">
+                    </div>
+                    <button class="btn btn-primary" id="btnDrawGrid">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM14 5a1 1 0 011-1h4a1 1 0 011 1v7a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1H5a1 1 0 01-1-1v-3zM14 16a1 1 0 011-1h4a1 1 0 011 1v3a1 1 0 01-1 1h-4a1 1 0 01-1-1v-3z" />
+                        </svg>
+                        Draw Grid
+                    </button>
+                    <button class="btn btn-secondary" id="btnClearGrid">Clear Grid</button>
+                </div>
+
+                <div class="sidebar-section">
+                    <h2 class="section-title">
+                        <span class="step-number">5</span>
+                        Cell Template
+                    </h2>
+                    <button class="btn btn-primary" id="btnTemplateMode">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                        </svg>
+                        Start Template Mode
+                    </button>
+                    <div id="fieldSelectionContainer" class="hidden" style="margin-top: 12px;">
+                        <label for="fieldSelect" style="display: block; margin-bottom: 8px; font-weight: 600; font-size: 14px;">
+                            Select Field to Draw:
+                        </label>
+                        <select id="fieldSelect" class="input-field" style="width: 100%; padding: 10px; font-size: 14px; margin-bottom: 8px;">
+                            <option value="">-- Select a field --</option>
+                            <option value="voterID">Voter ID (EPIC No)</option>
+                            <option value="photo">Photo</option>
+                            <option value="serialNumber">Serial Number</option>
+                            <option value="name">Name</option>
+                            <option value="relativeName">Relative Name</option>
+                            <option value="houseNumber">House Number</option>
+                            <option value="age">Age</option>
+                            <option value="gender">Gender</option>
+                            <option value="yadiBhag">Yadi Bhag</option>
+                        </select>
+                        <div id="selectedFieldIndicator" style="display: none; padding: 8px; background: #f3f4f6; border-radius: 4px; font-size: 13px; margin-top: 8px;">
+                            <strong>Selected:</strong> <span id="selectedFieldName">-</span>
+                        </div>
+                        <p style="font-size: 12px; color: #6b7280; margin-top: 8px;">
+                            Select a field from dropdown, then draw a box on the first cell (top-left)
+                        </p>
+                    </div>
+                    <button class="btn btn-success" id="btnApplyTemplate" disabled>Apply Template to All</button>
+                    <div id="templateStatus" class="template-status hidden"></div>
+                </div>
+
+                <div class="sidebar-section">
+                    <h2 class="section-title">
+                        <span class="step-number">6</span>
+                        Extract Data
+                    </h2>
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label style="display: flex; align-items: center; cursor: pointer;">
+                            <input type="checkbox" id="includeImages" checked style="margin-right: 8px; width: 18px; height: 18px; cursor: pointer;">
+                            <span>Include Photos in Excel</span>
+                        </label>
+                        <small style="display: block; margin-top: 4px; color: #6b7280; font-size: 12px;">
+                            Uncheck to exclude Base64 image strings from Excel output
+                        </small>
+                    </div>
+                    <button class="btn btn-primary btn-large" id="btnExtract" disabled>
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Extract Vertically
+                    </button>
+                    <div id="extractionStatus" class="extraction-status hidden">
+                        <div class="extraction-progress-container">
+                            <div class="extraction-progress-bar">
+                                <div class="extraction-progress-fill" id="extractionProgressFill"></div>
+                            </div>
+                            <div class="extraction-progress-text" id="extractionProgressText">Preparing extraction...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="sidebar-section hidden" id="previewSection">
+                    <h2 class="section-title">
+                        <span class="step-number">7</span>
+                        Preview & Download
+                    </h2>
+                    <div class="extraction-summary" id="extractionSummary"></div>
+                    <button class="btn btn-secondary btn-large" id="btnPreview">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                        Preview Data
+                    </button>
+                    <button class="btn btn-success btn-large" id="btnDownload" disabled>
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Download Excel
+                    </button>
+                </div>
+            </aside>
+
+            <!-- PDF Viewer -->
+            <section class="viewer-container">
+                <div class="viewer-header">
+                    <div class="viewer-controls">
+                        <button class="control-btn" id="btnPrevPage" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                            </svg>
+                        </button>
+                        <span class="page-info">
+                            Page <span id="currentPage">-</span> of <span id="totalPages">-</span>
+                        </span>
+                        <button class="control-btn" id="btnNextPage" disabled>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="zoom-controls">
+                        <button class="control-btn" id="btnZoomOut">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM13 10H7" />
+                            </svg>
+                        </button>
+                        <span class="zoom-level" id="zoomLevel">100%</span>
+                        <button class="control-btn" id="btnZoomIn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v3m0 0v3m0-3h3m-3 0H7" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="canvas-wrapper" id="canvasWrapper">
+                    <canvas id="pdfCanvas"></canvas>
+                    <canvas id="overlayCanvas"></canvas>
+                </div>
+                <div class="viewer-placeholder" id="viewerPlaceholder">
+                    <svg class="placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p>Upload a PDF to get started</p>
+                </div>
+            </section>
+        </main>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay hidden" id="loadingOverlay">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">Processing...</p>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toastContainer"></div>
+
+        <!-- Detection Table Modal -->
+        <div class="modal hidden" id="detectionModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>📊 Detection Results - Detailed View</h2>
+                    <button class="modal-close" id="btnCloseModal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <!-- Voter ID Table -->
+                    <div class="detection-table-section">
+                        <h3>🔷 Voter ID Boxes (<span id="voterIdCount">0</span>)</h3>
+                        <div class="table-wrapper">
+                            <table class="detection-table" id="voterIdTable">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Voter ID</th>
+                                        <th>X</th>
+                                        <th>Y</th>
+                                        <th>Width</th>
+                                        <th>Height</th>
+                                        <th>Confidence</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="voterIdTableBody">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Photo Table -->
+                    <div class="detection-table-section">
+                        <h3>📷 Photo Boxes (<span id="photoCount">0</span>)</h3>
+                        <div class="table-wrapper">
+                            <table class="detection-table" id="photoTable">
+                                <thead>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>X</th>
+                                        <th>Y</th>
+                                        <th>Width</th>
+                                        <th>Height</th>
+                                        <th>Confidence</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="photoTableBody">
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Grid Info -->
+                    <div class="detection-table-section">
+                        <h3>📊 Grid Information</h3>
+                        <div class="grid-info-table">
+                            <table class="detection-table">
+                                <tbody>
+                                    <tr>
+                                        <td><strong>Grid Detected:</strong></td>
+                                        <td id="gridDetectedInfo">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Rows:</strong></td>
+                                        <td id="gridRowsInfo">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Columns:</strong></td>
+                                        <td id="gridColumnsInfo">-</td>
+                                    </tr>
+                                    <tr>
+                                        <td><strong>Grid Boundary:</strong></td>
+                                        <td id="gridBoundaryInfo">-</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="btnExportDetectionModal">
+                        <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        Export as CSV
+                    </button>
+                    <button class="btn btn-primary" id="btnCloseModalFooter">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview Modal -->
+    <div class="modal hidden" id="previewModal">
+        <div class="modal-content" style="max-width: 90%; max-height: 90vh;">
+            <div class="modal-header">
+                <h2>📊 Extracted Data Preview</h2>
+                <button class="modal-close" id="btnClosePreview">&times;</button>
+            </div>
+            <div class="modal-body" style="overflow: auto; max-height: 70vh;">
+                <div class="preview-stats" id="previewStats"></div>
+                <!-- Table Images Section -->
+                <div id="tableImagesSection" class="table-images-section" style="margin-bottom: 20px; display: none;">
+                    <h3 style="margin-bottom: 10px;">📊 Generated Table Images</h3>
+                    <div id="tableImagesContainer" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
+                        <!-- Table images will be populated here -->
+                    </div>
+                </div>
+                
+                <div class="preview-table-container">
+                    <table class="preview-table" id="previewTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Page</th>
+                                <th>Row</th>
+                                <th>Column</th>
+                                <th>Voter ID</th>
+                                <th>Serial Number</th>
+                                <th class="name-header hidden">Name</th>
+                                <th class="relative-name-header hidden">Relative Name</th>
+                                <th class="house-number-header hidden">House Number</th>
+                                <th class="age-header hidden">Age</th>
+                                <th class="gender-header hidden">Gender</th>
+                                <th class="yadi-bhag-header hidden">Yadi Bhag</th>
+                                <th>Photo</th>
+                                <th>Confidence</th>
+                            </tr>
+                        </thead>
+                        <tbody id="previewTableBody">
+                            <!-- Data will be populated here -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="btnClosePreviewFooter">Close</button>
+                <button class="btn btn-success" id="btnDownloadFromPreview">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    Download Excel
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/api.js"></script>
+    <script src="js/pdfViewer.js"></script>
+    <script src="js/gridOverlay.js"></script>
+    <script src="js/azureVisionIntegration.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
+
+
