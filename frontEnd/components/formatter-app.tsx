@@ -76,7 +76,6 @@ export function FormatterApp() {
   })
   const [rawAzureText, setRawAzureText] = useState<string>("")
   const [rawApiResponses, setRawApiResponses] = useState<string>("")
-  const [isDebugOpen, setIsDebugOpen] = useState<boolean>(false)
   const [isApiDebugOpen, setIsApiDebugOpen] = useState<boolean>(false)
   const [isTranslating, setIsTranslating] = useState<boolean>(false)
   const [translationProgress, setTranslationProgress] = useState<number>(0)
@@ -97,12 +96,6 @@ export function FormatterApp() {
   const [skipPagesStart, setSkipPagesStart] = useState<number>(0)
   const [skipPagesEnd, setSkipPagesEnd] = useState<number>(0)
   const [concurrency, setConcurrency] = useState<number>(5)
-  const [problematicPages, setProblematicPages] = useState<Array<{
-    pageNumber: number
-    rawText: string
-    missingNames: number
-    votersWithIssues: Array<{ serial: string; name: string }>
-  }>>([])
 
   const headerInfo = useMemo(() => tryExtractHeaderInfo(raw), [raw])
   const hintedAddress = useMemo(() => {
@@ -112,6 +105,70 @@ export function FormatterApp() {
     }
     return tryExtractAddress(raw) || ""
   }, [raw, headerInfo])
+  const serialGapInfo = useMemo(() => {
+    if (!voters.length) return null
+
+    const numericSerials = voters
+      .map((voter) => {
+        if (!voter.serial) return null
+        const match = voter.serial.toString().match(/\d+/g)
+        if (!match) return null
+        const parsed = parseInt(match.join(""), 10)
+        return isNaN(parsed) ? null : parsed
+      })
+      .filter((value): value is number => typeof value === "number")
+
+    if (!numericSerials.length) return null
+
+    // Find duplicates
+    const serialCounts = new Map<number, number>()
+    numericSerials.forEach(serial => {
+      serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1)
+    })
+    
+    const duplicates = Array.from(serialCounts.entries())
+      .filter(([_, count]) => count > 1)
+      .map(([serial, count]) => ({ serial, count }))
+      .sort((a, b) => a.serial - b.serial)
+
+    const uniqueSorted = Array.from(new Set(numericSerials)).sort((a, b) => a - b)
+    if (uniqueSorted.length < 2) {
+      return {
+        min: uniqueSorted[0],
+        max: uniqueSorted[0],
+        totalSerials: numericSerials.length,
+        uniqueSerials: uniqueSorted.length,
+        missingNumbers: [],
+        missingCount: 0,
+        duplicates: duplicates,
+        duplicateCount: duplicates.length,
+      }
+    }
+
+    const missingNumbers: number[] = []
+
+    for (let i = 0; i < uniqueSorted.length - 1; i++) {
+      const current = uniqueSorted[i]
+      const next = uniqueSorted[i + 1]
+
+      if (next - current > 1) {
+        for (let candidate = current + 1; candidate < next; candidate++) {
+          missingNumbers.push(candidate)
+        }
+      }
+    }
+
+    return {
+      min: uniqueSorted[0],
+      max: uniqueSorted[uniqueSorted.length - 1],
+      totalSerials: numericSerials.length,
+      uniqueSerials: uniqueSorted.length,
+      missingNumbers,
+      missingCount: missingNumbers.length,
+      duplicates: duplicates,
+      duplicateCount: duplicates.length,
+    }
+  }, [voters])
 
   // Fetch database tables on component mount
   useEffect(() => {
@@ -215,7 +272,6 @@ export function FormatterApp() {
     setAddress("")
     setRawAzureText("")
     setRawApiResponses("")
-    setIsDebugOpen(false)
     setIsApiDebugOpen(false)
     setMatchedRecords([])
     setUnmatchedRecords([])
@@ -225,16 +281,30 @@ export function FormatterApp() {
     setTempExcelPath('')
     setSkipPagesStart(0)
     setSkipPagesEnd(0)
-    setProblematicPages([])
   }
 
   function handleExportExcel() {
     const addr = (address.trim() || hintedAddress || "").trim()
     if (!voters.length) return
 
+    // Verify all voters are included (including duplicates)
+    console.log(`Exporting ${voters.length} voters to Excel (including all duplicates)`);
+    
+    // Count duplicates for verification
+    const serialCounts = new Map<string, number>();
+    voters.forEach(v => {
+      const serial = v.serial || '';
+      serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
+    });
+    const duplicates = Array.from(serialCounts.entries()).filter(([_, count]) => count > 1);
+    if (duplicates.length > 0) {
+      console.log(`Export includes ${duplicates.length} duplicate serial numbers:`, duplicates.map(([serial, count]) => `${serial} (${count}x)`));
+    }
+
     // Custom field names as requested
     const header = [
       "SERIAL_NO",
+      "DUPLICATE",  // Indicator column for duplicates
       "EPIC_NO",
       "PRABHAG",
       "PRABHAG_EN",
@@ -256,31 +326,117 @@ export function FormatterApp() {
       "GAN",
       "GAN_EN"
     ]
-    const rows = voters.map((v) => [
-      v.serial,                                                  // SERIAL_NO = Serial Number
-      v.epic,                                                    // EPIC_NO = EPIC ID
-      v.prabhag || '',
-      v.prabhagEnglish || '',
-      v.yadi || '',
-      v.yadiEnglish || '',
-      v.matdarKendra || '',
-      v.matdarKendraEnglish || '',
-      v.booth || addr,
-      v.boothEnglish || v.addressEnglish || '',
-      v.part,                                                    // PART_NUMBER = Part Number
-      v.nameEnglish || '',                                      // NAME_EN = Name (English)
-      v.name || '',                                             // NAME_V1 = Name (Marathi)
-      '',                                                        // RLN_TYPE (empty for now)
-      v.relEnglish || '',                                       // RLN_NAME_EN = Father/Husband (English)
-      v.rel || '',                                              // RLN_NAME_V1 = Father/Husband (Marathi)
-      v.house,                                                   // C_HOUSE_NO = House Number
-      v.age,                                                     // AGE = Age
-      v.genderEnglish || v.genderMarathi || '',                 // GENDER = Gender
-      v.gan || '',                                              // GAN = निवाचन गण
-      v.ganEnglish || ''
-    ])
+    // Create a set of duplicate serials for quick lookup
+    const duplicateSerialsSet = new Set(duplicates.map(([serial]) => serial));
+    
+    // Include ALL voters - no filtering or deduplication
+    // Map each voter to a row - this preserves ALL duplicates
+    const rows = voters.map((v, index) => {
+      const isDuplicate = duplicateSerialsSet.has(v.serial || '');
+      // Debug: Log duplicates as we export
+      if (isDuplicate) {
+        console.log(`Exporting duplicate serial ${v.serial} at row ${index + 2} (header is row 1)`);
+      }
+      return [
+        v.serial || '',                                          // SERIAL_NO = Serial Number (preserve all duplicates)
+        isDuplicate ? 'DUPLICATE' : '',                          // DUPLICATE = Indicator column
+        v.epic || '',                                            // EPIC_NO = EPIC ID
+        v.prabhag || '',
+        v.prabhagEnglish || '',
+        v.yadi || '',
+        v.yadiEnglish || '',
+        v.matdarKendra || '',
+        v.matdarKendraEnglish || '',
+        v.booth || addr,
+        v.boothEnglish || v.addressEnglish || '',
+        v.part,                                                    // PART_NUMBER = Part Number
+        v.nameEnglish || '',                                      // NAME_EN = Name (English)
+        v.name || '',                                             // NAME_V1 = Name (Marathi)
+        '',                                                        // RLN_TYPE (empty for now)
+        v.relEnglish || '',                                       // RLN_NAME_EN = Father/Husband (English)
+        v.rel || '',                                              // RLN_NAME_V1 = Father/Husband (Marathi)
+        v.house,                                                   // C_HOUSE_NO = House Number
+        v.age,                                                     // AGE = Age
+        v.genderEnglish || v.genderMarathi || '',                 // GENDER = Gender
+        v.gan || '',                                              // GAN = निवाचन गण
+        v.ganEnglish || ''
+      ];
+    });
+
+    // Final verification: Count serial numbers in exported rows
+    const exportedSerialCounts = new Map<string, number>();
+    rows.forEach(row => {
+      const serial = row[0] || ''; // SERIAL_NO is first column
+      exportedSerialCounts.set(serial, (exportedSerialCounts.get(serial) || 0) + 1);
+    });
+    const exportedDuplicates = Array.from(exportedSerialCounts.entries()).filter(([_, count]) => count > 1);
+    
+    console.log(`📊 Excel Export Summary:`);
+    console.log(`   - Total rows: ${rows.length}`);
+    console.log(`   - Unique serial numbers: ${exportedSerialCounts.size}`);
+    if (exportedDuplicates.length > 0) {
+      console.log(`   - ✅ Duplicate serials in export: ${exportedDuplicates.length}`);
+      exportedDuplicates.forEach(([serial, count]) => {
+        console.log(`      Serial ${serial}: ${count} rows`);
+        // Check if serial 96 is in the export
+        if (serial === '96') {
+          console.log(`      ⚠️ Serial 96 found in export with ${count} occurrences`);
+        }
+      });
+    } else {
+      console.log(`   - ⚠️ No duplicate serials found in export (this might indicate a parsing issue)`);
+    }
+    
+    // Check specifically for serial 96
+    const serial96Rows = rows.filter(row => row[0] === '96');
+    if (serial96Rows.length > 0) {
+      console.log(`✅ Serial 96 found in export: ${serial96Rows.length} row(s)`);
+    } else {
+      console.log(`❌ Serial 96 NOT found in export - this indicates a parsing issue`);
+      console.log(`   Available serials in export:`, Array.from(exportedSerialCounts.keys()).slice(0, 20));
+    }
 
     const ws = utils.aoa_to_sheet([header, ...rows])
+    
+    // Try to apply red background color to duplicate rows (if xlsx supports it)
+    if (duplicateSerialsSet.size > 0) {
+      try {
+        // Get the range of the sheet
+        const range = utils.decode_range(ws['!ref'] || 'A1');
+        
+        // Iterate through all rows (skip header row 0)
+        for (let rowIndex = 1; rowIndex <= range.e.r; rowIndex++) {
+          const row = rows[rowIndex - 1]; // rows array is 0-indexed
+          const serial = row[0] || '';
+          
+          if (duplicateSerialsSet.has(serial)) {
+            // Apply red background to all cells in this row
+            for (let colIndex = 0; colIndex <= range.e.c; colIndex++) {
+              const cellAddress = utils.encode_cell({ r: rowIndex, c: colIndex });
+              if (!ws[cellAddress]) {
+                ws[cellAddress] = { t: 's', v: '' };
+              }
+              // Set cell style for red background
+              ws[cellAddress].s = {
+                fill: {
+                  fgColor: { rgb: 'FFFF0000' } // Red background (BGR format)
+                },
+                font: {
+                  color: { rgb: 'FFFFFFFF' }, // White text
+                  bold: true
+                }
+              };
+            }
+          }
+        }
+        
+        console.log(`🎨 Applied red highlighting to ${duplicateSerialsSet.size} duplicate serial number(s)`);
+      } catch (error) {
+        console.warn('Could not apply cell styling (xlsx library may not support it):', error);
+        console.log('Duplicate rows are marked with "DUPLICATE" in column B instead');
+      }
+    }
+    
     const wb = utils.book_new()
     utils.book_append_sheet(wb, ws, "Voters")
     writeFile(wb, "voters_with_translations.xlsx")
@@ -362,6 +518,44 @@ export function FormatterApp() {
         setProcessingStatus(status)
       }, concurrency)
 
+      // Save each page's OCR text to separate .txt files on the server
+      setProcessingStatus({
+        status: 'processing',
+        message: `Saving OCR text for each page...`,
+        progress: 75
+      })
+      
+      const savePromises = ocrResults.map(async (result, index) => {
+        const actualPageNumber = index + 1 + skipPagesStart; // Account for skipped pages
+        const filename = `page-${String(actualPageNumber).padStart(3, '0')}.txt`;
+        
+        try {
+          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/save-ocr-page-text`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              pageNumber: actualPageNumber,
+              text: result.text,
+              filename: filename
+            }),
+          });
+          
+          if (!response.ok) {
+            console.warn(`Failed to save text for page ${actualPageNumber}`);
+          } else {
+            const data = await response.json();
+            console.log(`Saved OCR text for page ${actualPageNumber}: ${data.filename}`);
+          }
+        } catch (error) {
+          console.error(`Error saving OCR text for page ${actualPageNumber}:`, error);
+        }
+      });
+      
+      await Promise.all(savePromises);
+      console.log(`All ${ocrResults.length} page texts saved to server`);
+
       const combinedText = combineOCRResults(ocrResults)
       const extractedHeader = tryExtractHeaderInfo(combinedText)
       const rawAzureText = getRawOCRResults(ocrResults) // Get completely raw text
@@ -374,10 +568,23 @@ export function FormatterApp() {
       const addr = extractedHeader?.booth || extractedHeader?.raw || tryExtractAddress(combinedText) || ""
       setAddress(addr)
       const parsedVoters = parseVoters(combinedText, addr)
+      
+      // Verify duplicates are preserved after parsing
+      const serialCounts = new Map<string, number>();
+      parsedVoters.forEach(v => {
+        const serial = v.serial || '';
+        serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
+      });
+      const duplicatesAfterParsing = Array.from(serialCounts.entries()).filter(([_, count]) => count > 1);
+      if (duplicatesAfterParsing.length > 0) {
+        console.log(`✅ Parsing preserved ${duplicatesAfterParsing.length} duplicate serial numbers:`, 
+          duplicatesAfterParsing.map(([serial, count]) => `${serial} (${count}x)`));
+        console.log(`Total voters parsed: ${parsedVoters.length} (including all duplicates)`);
+      } else {
+        console.log(`Total voters parsed: ${parsedVoters.length} (no duplicates found)`);
+      }
+      
       setVoters(parsedVoters)
-
-      // Analyze for missing names and track problematic pages
-      analyzeProblematicPages(ocrResults, parsedVoters)
 
       setProcessingStatus({
         status: 'processing',
@@ -393,11 +600,6 @@ export function FormatterApp() {
         message: `Successfully processed ${images.length} pages, extracted ${parsedVoters.length} voters, and translated to English`,
         progress: 100
       })
-      
-      // Auto-open debug section if there are issues with extraction
-      if (parsedVoters.length === 0 || parsedVoters.some(voter => !voter.name || voter.name.length < 3)) {
-        setIsDebugOpen(true)
-      }
 
     } catch (error) {
       
@@ -418,115 +620,6 @@ export function FormatterApp() {
 
   function handleUploadClick() {
     fileInputRef.current?.click()
-  }
-
-  function analyzeProblematicPages(ocrResults: any[], parsedVoters: typeof voters) {
-    try {
-      console.log('Analyzing problematic pages...', { 
-        ocrResultsCount: ocrResults.length, 
-        votersCount: parsedVoters.length 
-      })
-
-      const pageTexts: Array<{ pageNumber: number; text: string }> = []
-      
-      // Extract raw text for each page - try multiple paths for the text
-      ocrResults.forEach((result, index) => {
-        let text = ''
-        
-        // Try different paths to get the raw text
-        if (result?.analyzeResult?.content) {
-          text = result.analyzeResult.content
-        } else if (result?.analyzeResult?.readResults) {
-          // Alternative path: extract from readResults
-          text = result.analyzeResult.readResults
-            .map((page: any) => page.lines?.map((line: any) => line.text).join('\n') || '')
-            .join('\n\n')
-        } else if (result?.text) {
-          text = result.text
-        }
-        
-        if (text) {
-          pageTexts.push({
-            pageNumber: index + 1 + skipPagesStart, // Adjust for skipped pages
-            text: text
-          })
-          console.log(`Page ${index + 1}: ${text.length} characters extracted`)
-        } else {
-          console.warn(`Page ${index + 1}: No text found in OCR result`)
-        }
-      })
-
-      console.log(`Total pages with text: ${pageTexts.length}`)
-
-      // Find voters with missing names
-      const votersWithIssues = parsedVoters.filter(voter => 
-        !voter.name || 
-        voter.name.length < 3 || 
-        voter.name.includes('[MISSING NAME')
-      )
-
-      console.log(`Found ${votersWithIssues.length} voters with missing names`)
-
-      if (votersWithIssues.length === 0) {
-        setProblematicPages([])
-        return
-      }
-
-      // Map voters to pages by searching for their serial numbers in the page text
-      const problematicPagesData: Array<{
-        pageNumber: number
-        rawText: string
-        missingNames: number
-        votersWithIssues: Array<{ serial: string; name: string }>
-      }> = []
-
-      // For each page, find which problematic voters belong to it
-      pageTexts.forEach((pageInfo) => {
-        const pageVotersWithIssues = votersWithIssues.filter(voter => {
-          if (!voter.serial) return false
-          // Check if this voter's serial number appears in this page's text (handle both commas and periods)
-          const serialPattern = new RegExp(`\\b${voter.serial.replace(/[,.]/g, '[,.]?')}\\b`)
-          return serialPattern.test(pageInfo.text)
-        })
-
-        if (pageVotersWithIssues.length > 0) {
-          console.log(`Page ${pageInfo.pageNumber}: Found ${pageVotersWithIssues.length} problematic voters`)
-          problematicPagesData.push({
-            pageNumber: pageInfo.pageNumber,
-            rawText: pageInfo.text,
-            missingNames: pageVotersWithIssues.length,
-            votersWithIssues: pageVotersWithIssues.map(v => ({
-              serial: v.serial,
-              name: v.name
-            }))
-          })
-        }
-      })
-
-      // If we couldn't match any voters to pages (e.g., serial numbers not found),
-      // fall back to showing all pages with problematic voters
-      if (problematicPagesData.length === 0 && votersWithIssues.length > 0 && pageTexts.length > 0) {
-        console.warn('Could not match voters to pages by serial. Showing all pages.')
-        // Just show all pages since we can't determine which page has the issue
-        pageTexts.forEach((pageInfo) => {
-          problematicPagesData.push({
-            pageNumber: pageInfo.pageNumber,
-            rawText: pageInfo.text,
-            missingNames: Math.ceil(votersWithIssues.length / pageTexts.length),
-            votersWithIssues: votersWithIssues.slice(0, 5).map(v => ({
-              serial: v.serial,
-              name: v.name
-            }))
-          })
-        })
-      }
-
-      console.log(`Setting ${problematicPagesData.length} problematic pages`)
-      setProblematicPages(problematicPagesData)
-    } catch (error) {
-      console.error('Error analyzing problematic pages:', error)
-      setProblematicPages([])
-    }
   }
 
   async function translateVotersToEnglish(votersToTranslate: typeof voters) {
@@ -631,6 +724,20 @@ export function FormatterApp() {
     if (!voters.length) return null
 
     try {
+      // Verify all voters are included (including duplicates)
+      console.log(`Uploading ${voters.length} voters to server (including all duplicates)`);
+      
+      // Count duplicates for verification
+      const serialCounts = new Map<string, number>();
+      voters.forEach(v => {
+        const serial = v.serial || '';
+        serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
+      });
+      const duplicates = Array.from(serialCounts.entries()).filter(([_, count]) => count > 1);
+      if (duplicates.length > 0) {
+        console.log(`Upload includes ${duplicates.length} duplicate serial numbers:`, duplicates.map(([serial, count]) => `${serial} (${count}x)`));
+      }
+
       // Create Excel data with extracted and translated info
       const header = [
         "SERIAL_NO",
@@ -651,25 +758,33 @@ export function FormatterApp() {
         "GENDER",
         "GAN"
       ]
-      const rows = voters.map((v) => [
-        v.serial,
-        v.epic,
-        v.prabhag || '',
-        v.yadi || '',
-        v.matdarKendra || '',
-        v.booth || addr,
-        v.addressEnglish || '',
-        v.part,
-        v.nameEnglish || '',
-        v.name || '',
-        '',
-        v.relEnglish || '',
-        v.rel || '',
-        v.house,
-        v.age,
-        v.genderEnglish || v.genderMarathi || '',
-        v.gan || ''
-      ])
+      // Include ALL voters - no filtering or deduplication
+      // Map each voter to a row - this preserves ALL duplicates
+      const rows = voters.map((v, index) => {
+        // Debug: Log duplicates as we upload
+        if (duplicates.some(([serial]) => serial === v.serial)) {
+          console.log(`Uploading duplicate serial ${v.serial} at row ${index + 2} (header is row 1)`);
+        }
+        return [
+          v.serial || '',                                          // SERIAL_NO = Serial Number (preserve all duplicates)
+          v.epic || '',
+          v.prabhag || '',
+          v.yadi || '',
+          v.matdarKendra || '',
+          v.booth || addr,
+          v.addressEnglish || '',
+          v.part || '',
+          v.nameEnglish || '',
+          v.name || '',
+          '',
+          v.relEnglish || '',
+          v.rel || '',
+          v.house || '',
+          v.age || '',
+          v.genderEnglish || v.genderMarathi || '',
+          v.gan || ''
+        ];
+      });
 
       const ws = utils.aoa_to_sheet([header, ...rows])
       const wb = utils.book_new()
@@ -936,190 +1051,6 @@ export function FormatterApp() {
         </CardContent>
       </Card>
 
-      {/* Missing Names Debug Section */}
-      {voters.length > 0 && voters.some(v => !v.name || v.name.length < 3 || v.name.includes('[MISSING NAME')) && (
-        <Card className="border-orange-500 bg-orange-50/50 dark:bg-orange-950/20">
-          <CardHeader>
-            <CardTitle className="text-orange-700 dark:text-orange-400 flex items-center gap-2">
-              <XCircle className="h-5 w-5" />
-              ⚠️ Missing Names Detected - Debug Information
-            </CardTitle>
-            <CardDescription>
-              Some voters have missing or incomplete names. Review the information below to understand the issue.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Alert className="bg-orange-100 dark:bg-orange-900/30 border-orange-300">
-              <AlertDescription>
-                <strong>Found {voters.filter(v => !v.name || v.name.length < 3 || v.name.includes('[MISSING NAME')).length} voters with missing names</strong>
-                {problematicPages.length > 0 && ` across ${problematicPages.length} page(s)`}.
-                Review the raw text below to identify OCR patterns or formatting issues.
-              </AlertDescription>
-            </Alert>
-
-            {/* Show all voters with missing names */}
-            <Collapsible className="border rounded-lg p-4 bg-white dark:bg-gray-900">
-              <CollapsibleTrigger className="flex items-center justify-between w-full hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded">
-                <div className="flex items-center gap-3">
-                  <Badge variant="destructive" className="text-sm">
-                    All Missing Names
-                  </Badge>
-                  <span className="text-sm font-medium">
-                    Click to view complete list
-                  </span>
-                </div>
-              </CollapsibleTrigger>
-              
-              <CollapsibleContent className="pt-4 space-y-3">
-                <div className="space-y-1 max-h-64 overflow-y-auto">
-                  {voters
-                    .filter(v => !v.name || v.name.length < 3 || v.name.includes('[MISSING NAME'))
-                    .map((voter, idx) => (
-                      <div key={idx} className="text-sm p-2 bg-red-50 dark:bg-red-950/30 rounded border border-red-200 dark:border-red-800 flex justify-between items-center">
-                        <div>
-                          <span className="font-medium">Serial: {voter.serial || 'N/A'}</span>
-                          <span className="mx-2">|</span>
-                          <span className="font-medium">EPIC: {voter.epic || 'N/A'}</span>
-                          <span className="mx-2">|</span>
-                          <span className="text-red-700 dark:text-red-400">
-                            Name: {voter.name || '[NO NAME]'}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-
-            {/* Show problematic pages with raw text */}
-            {problematicPages.length > 0 ? (
-              <>
-                <h3 className="text-sm font-semibold pt-4">Pages with Missing Names:</h3>
-                {problematicPages.map((page, idx) => (
-                  <Collapsible key={idx} defaultOpen={idx === 0} className="border rounded-lg p-4 bg-white dark:bg-gray-900">
-                    <CollapsibleTrigger className="flex items-center justify-between w-full hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded">
-                      <div className="flex items-center gap-3">
-                        <Badge variant="destructive" className="text-sm">
-                          Page {page.pageNumber}
-                        </Badge>
-                        <span className="text-sm font-medium">
-                          {page.missingNames} missing name{page.missingNames > 1 ? 's' : ''}
-                        </span>
-                      </div>
-                      <Badge variant="outline" className="text-xs">
-                        {idx === 0 ? 'Open (click to close)' : 'Click to view raw OCR text'}
-                      </Badge>
-                    </CollapsibleTrigger>
-                    
-                    <CollapsibleContent className="pt-4 space-y-3">
-                      {/* Show affected voters */}
-                      <div className="space-y-2">
-                        <h4 className="text-sm font-semibold">Affected Voters on this Page:</h4>
-                        <div className="space-y-1">
-                          {page.votersWithIssues.map((voter, vIdx) => (
-                            <div key={vIdx} className="text-sm p-2 bg-red-50 dark:bg-red-950/30 rounded border border-red-200 dark:border-red-800">
-                              <span className="font-medium">Serial: {voter.serial || 'N/A'}</span> - 
-                              <span className="text-red-700 dark:text-red-400 ml-2">
-                                {voter.name || '[NO NAME]'}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Show raw OCR text */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <h4 className="text-sm font-semibold">Raw Azure OCR Text for Page {page.pageNumber}:</h4>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              navigator.clipboard.writeText(page.rawText)
-                              alert('Raw text copied to clipboard!')
-                            }}
-                          >
-                            Copy Text
-                          </Button>
-                        </div>
-                        <div className="relative">
-                          <Textarea
-                            value={page.rawText}
-                            readOnly
-                            className="min-h-[500px] font-mono text-xs bg-gray-50 dark:bg-gray-950 border-2 border-orange-300"
-                          />
-                          <div className="absolute bottom-2 right-2 text-xs text-muted-foreground bg-white dark:bg-gray-900 px-2 py-1 rounded border">
-                            {page.rawText.length} characters
-                          </div>
-                        </div>
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
-                ))}
-              </>
-            ) : rawAzureText ? (
-              <>
-                <Alert className="bg-yellow-100 dark:bg-yellow-900/30 border-yellow-300 mb-4">
-                  <AlertDescription>
-                    Could not automatically map missing names to specific pages. Showing all raw Azure OCR text below.
-                  </AlertDescription>
-                </Alert>
-                
-                <Collapsible defaultOpen={true} className="border rounded-lg p-4 bg-white dark:bg-gray-900">
-                  <CollapsibleTrigger className="flex items-center justify-between w-full hover:bg-gray-50 dark:hover:bg-gray-800 p-2 rounded">
-                    <div className="flex items-center gap-3">
-                      <Badge variant="destructive" className="text-sm">
-                        All Pages - Raw Azure OCR Text
-                      </Badge>
-                      <span className="text-sm font-medium">
-                        Complete extraction
-                      </span>
-                    </div>
-                    <Badge variant="outline" className="text-xs">
-                      Open (click to close)
-                    </Badge>
-                  </CollapsibleTrigger>
-                  
-                  <CollapsibleContent className="pt-4 space-y-3">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-semibold">Complete Raw Azure OCR Text:</h4>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            navigator.clipboard.writeText(rawAzureText)
-                            alert('Complete raw text copied to clipboard!')
-                          }}
-                        >
-                          Copy All Text
-                        </Button>
-                      </div>
-                      <div className="relative">
-                        <Textarea
-                          value={rawAzureText}
-                          readOnly
-                          className="min-h-[600px] font-mono text-xs bg-gray-50 dark:bg-gray-950 border-2 border-orange-300"
-                        />
-                        <div className="absolute bottom-2 right-2 text-xs text-muted-foreground bg-white dark:bg-gray-900 px-2 py-1 rounded border">
-                          {rawAzureText.length} characters
-                        </div>
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              </>
-            ) : (
-              <Alert className="bg-red-100 dark:bg-red-900/30 border-red-300">
-                <AlertDescription>
-                  ❌ No raw Azure text available. This might indicate an issue with OCR processing. Please check the browser console (F12) for errors.
-                </AlertDescription>
-              </Alert>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       {/* Data Summary and Workflow */}
       {voters.length > 0 && (
         <>
@@ -1152,6 +1083,68 @@ export function FormatterApp() {
                     </div>
                   </div>
                 </div>
+
+                {serialGapInfo && (
+                  <div className="p-4 border rounded-lg bg-muted/30 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold">Serial Number Integrity</p>
+                        <p className="text-xs text-muted-foreground">
+                          Range {serialGapInfo.min} - {serialGapInfo.max} ({serialGapInfo.totalSerials} total, {serialGapInfo.uniqueSerials} unique)
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        {serialGapInfo.missingCount > 0 && (
+                          <Badge variant="destructive">
+                            {serialGapInfo.missingCount} gap{serialGapInfo.missingCount > 1 ? "s" : ""} detected
+                          </Badge>
+                        )}
+                        {serialGapInfo.duplicateCount > 0 && (
+                          <Badge variant="destructive">
+                            {serialGapInfo.duplicateCount} duplicate{serialGapInfo.duplicateCount > 1 ? "s" : ""} found
+                          </Badge>
+                        )}
+                        {serialGapInfo.missingCount === 0 && serialGapInfo.duplicateCount === 0 && (
+                          <Badge variant="secondary" className="text-green-700 dark:text-green-300">
+                            No issues found
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {serialGapInfo.missingCount > 0 && (
+                      <div className="text-sm space-y-1">
+                        <p className="font-medium text-muted-foreground">
+                          Missing SERIAL_NO values ({serialGapInfo.missingCount} total):
+                        </p>
+                        <div className="max-h-48 overflow-y-auto p-2 bg-background rounded border">
+                          <p className="font-mono text-xs break-words">
+                            {serialGapInfo.missingNumbers.join(", ")}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {serialGapInfo.duplicateCount > 0 && (
+                      <div className="text-sm space-y-1">
+                        <p className="font-medium text-muted-foreground">
+                          Duplicate SERIAL_NO values ({serialGapInfo.duplicateCount} found):
+                        </p>
+                        <div className="max-h-48 overflow-y-auto p-2 bg-background rounded border">
+                          <p className="font-mono text-xs break-words">
+                            {serialGapInfo.duplicates.map(dup => `${dup.serial} (${dup.count}x)`).join(", ")}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    
+                    {serialGapInfo.missingCount === 0 && serialGapInfo.duplicateCount === 0 && (
+                      <p className="text-sm text-green-700 dark:text-green-400">
+                        SERIAL_NO column contains a continuous sequence with no missing values or duplicates.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Translation Progress */}
                 {isTranslating && (

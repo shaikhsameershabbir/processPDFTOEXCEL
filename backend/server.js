@@ -6,8 +6,13 @@ const mysql = require('mysql2/promise');
 const csv = require('csv-parser');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process');
+const { promisify } = require('util');
 const XLSX = require('xlsx');
 const { transliterateText } = require('./utils/translator');
+const { PDFDocument } = require('pdf-lib');
+
+const execAsync = promisify(exec);
 
 const app = express();
 
@@ -1107,6 +1112,230 @@ app.delete('/api/cleanup/:filename', (req, res) => {
   } catch (error) {
     console.error('Error cleaning up file:', error);
     res.status(500).json({ error: 'Failed to clean up file' });
+  }
+});
+
+// PDF Splitting endpoint
+app.post('/api/split-pdf', upload.single('pdf'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No PDF file uploaded' });
+    }
+
+    const pdfPath = req.file.path;
+    const pagesPerSplit = parseInt(req.body.pagesPerSplit) || 500;
+    const splitDir = path.join(UPLOADS_DIR, 'split-pdfs', Date.now().toString());
+    
+    // Create directory for split PDFs
+    if (!fs.existsSync(splitDir)) {
+      fs.mkdirSync(splitDir, { recursive: true });
+    }
+
+    // Read the PDF file
+    let pdfBytes = fs.readFileSync(pdfPath);
+    let workingPdfPath = pdfPath;
+    let isEncrypted = false;
+    let usedQpdf = false;
+    
+    // Try to load PDF - handle encryption gracefully
+    let pdfDoc;
+    try {
+      // First try loading normally
+      pdfDoc = await PDFDocument.load(pdfBytes);
+      console.log('PDF loaded successfully without encryption issues');
+    } catch (error) {
+      // If it fails due to encryption, try to decrypt with qpdf first
+      if (error.message && (error.message.includes('encrypted') || error.message.includes('password') || error.message.includes('Encrypt'))) {
+        console.log('PDF appears to have encryption flags, attempting to decrypt with qpdf...');
+        isEncrypted = true;
+        
+        // Try to use qpdf to decrypt the PDF
+        try {
+          const { stdout, stderr } = await execAsync(`which qpdf`);
+          if (stdout && stdout.trim()) {
+            const decryptedPath = pdfPath.replace('.pdf', '_decrypted.pdf');
+            try {
+              await execAsync(`qpdf --decrypt "${pdfPath}" "${decryptedPath}"`);
+              console.log('PDF decrypted successfully using qpdf');
+              workingPdfPath = decryptedPath;
+              pdfBytes = fs.readFileSync(decryptedPath);
+              pdfDoc = await PDFDocument.load(pdfBytes);
+              usedQpdf = true;
+            } catch (qpdfError) {
+              console.log('qpdf decryption failed, trying ignoreEncryption option...');
+              // Fall back to ignoreEncryption
+              pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+              console.log('PDF loaded with ignoreEncryption option (content may be limited)');
+            }
+          } else {
+            throw new Error('qpdf not available');
+          }
+        } catch (qpdfError) {
+          // qpdf not available or failed, try ignoreEncryption
+          console.log('qpdf not available, trying ignoreEncryption option...');
+          try {
+            pdfDoc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+            console.log('PDF loaded with ignoreEncryption option (content may be limited)');
+          } catch (encError) {
+            throw new Error('Cannot process PDF. Please ensure qpdf is installed for encrypted PDFs, or decrypt the PDF manually first.');
+          }
+        }
+      } else {
+        throw error;
+      }
+    }
+    
+    const totalPages = pdfDoc.getPageCount();
+    
+    if (totalPages === 0) {
+      throw new Error('PDF appears to have no pages');
+    }
+    
+    console.log(`PDF loaded: ${totalPages} pages detected`);
+    
+    // Try to verify we can access page content (test with first page)
+    try {
+      const testPage = pdfDoc.getPage(0);
+      const pageSize = testPage.getSize();
+      console.log(`Test page size: ${pageSize.width}x${pageSize.height} - Content accessible`);
+    } catch (testError) {
+      console.warn('Warning: Could not access page content details:', testError.message);
+      if (isEncrypted) {
+        console.warn('This may indicate that encrypted content cannot be fully accessed');
+      }
+    }
+
+    console.log(`Splitting PDF: ${req.file.originalname} (${totalPages} pages) into chunks of ${pagesPerSplit}`);
+
+    const splitFiles = [];
+    const totalSplits = Math.ceil(totalPages / pagesPerSplit);
+
+    // Split the PDF
+    for (let i = 0; i < totalSplits; i++) {
+      const startPage = i * pagesPerSplit;
+      const endPage = Math.min(startPage + pagesPerSplit, totalPages);
+      
+      // Create a new PDF document for this split
+      const splitDoc = await PDFDocument.create();
+      
+      // Copy pages from original PDF to split PDF
+      const pagesToCopy = [];
+      for (let j = startPage; j < endPage; j++) {
+        pagesToCopy.push(j);
+      }
+      
+      // Copy pages - this automatically copies all necessary resources (fonts, images, etc.)
+      const copiedPages = await splitDoc.copyPages(pdfDoc, pagesToCopy);
+      
+      // Add copied pages to the split document
+      // Note: copyPages returns pages that are already part of the new document
+      copiedPages.forEach((page) => {
+        splitDoc.addPage(page);
+      });
+      
+      console.log(`Split ${i + 1}/${totalSplits}: Copied pages ${startPage + 1}-${endPage} (${copiedPages.length} pages)`);
+
+      // Save the split PDF with all content preserved
+      const splitPdfBytes = await splitDoc.save();
+      const splitFileName = `part-${i + 1}-of-${totalSplits}-pages-${startPage + 1}-to-${endPage}.pdf`;
+      const splitFilePath = path.join(splitDir, splitFileName);
+      
+      fs.writeFileSync(splitFilePath, splitPdfBytes);
+      
+      const relativePath = path.relative(UPLOADS_DIR, splitFilePath).replace(/\\/g, '/');
+      splitFiles.push({
+        filename: splitFileName,
+        path: relativePath,
+        pages: endPage - startPage,
+        pageRange: `${startPage + 1}-${endPage}`,
+        downloadUrl: `/api/download-split-pdf?file=${encodeURIComponent(relativePath)}`
+      });
+    }
+
+    // Clean up the original uploaded file and decrypted file if created
+    if (fs.existsSync(pdfPath)) {
+      fs.unlinkSync(pdfPath);
+    }
+    if (usedQpdf && workingPdfPath !== pdfPath && fs.existsSync(workingPdfPath)) {
+      fs.unlinkSync(workingPdfPath);
+      console.log('Cleaned up decrypted temporary file');
+    }
+
+    res.json({
+      success: true,
+      totalPages,
+      totalSplits,
+      pagesPerSplit,
+      splitFiles,
+      splitDir: path.relative(UPLOADS_DIR, splitDir).replace(/\\/g, '/'),
+      warning: isEncrypted && !usedQpdf ? 'PDF had encryption flags detected. If pages appear blank, please install qpdf (sudo apt-get install qpdf) for better encryption handling, or decrypt the PDF manually first.' : null
+    });
+
+  } catch (error) {
+    console.error('Error splitting PDF:', error);
+    res.status(500).json({ error: 'Failed to split PDF: ' + error.message });
+  }
+});
+
+// Save OCR page text to file endpoint
+app.post('/api/save-ocr-page-text', async (req, res) => {
+  try {
+    const { pageNumber, text, filename } = req.body;
+    
+    if (!pageNumber || text === undefined) {
+      return res.status(400).json({ error: 'pageNumber and text are required' });
+    }
+
+    const ocrTextDir = path.join(UPLOADS_DIR, 'ocr-texts');
+    if (!fs.existsSync(ocrTextDir)) {
+      fs.mkdirSync(ocrTextDir, { recursive: true });
+    }
+
+    // Create filename: page-001.txt, page-002.txt, etc. or use provided filename
+    const pageFilename = filename || `page-${String(pageNumber).padStart(3, '0')}.txt`;
+    const filePath = path.join(ocrTextDir, pageFilename);
+
+    // Write text to file
+    fs.writeFileSync(filePath, text, 'utf8');
+
+    res.json({
+      success: true,
+      pageNumber,
+      filename: pageFilename,
+      path: path.relative(UPLOADS_DIR, filePath).replace(/\\/g, '/'),
+      message: `Page ${pageNumber} text saved successfully`
+    });
+
+  } catch (error) {
+    console.error('Error saving OCR page text:', error);
+    res.status(500).json({ error: 'Failed to save OCR text: ' + error.message });
+  }
+});
+
+// Download split PDF endpoint
+app.get('/api/download-split-pdf', (req, res) => {
+  try {
+    const filePath = req.query.file;
+    if (!filePath) {
+      return res.status(400).json({ error: 'File path is required' });
+    }
+
+    const fullPath = path.join(UPLOADS_DIR, filePath);
+    
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    const fileName = path.basename(fullPath);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    
+    const fileStream = fs.createReadStream(fullPath);
+    fileStream.pipe(res);
+
+  } catch (error) {
+    console.error('Error downloading split PDF:', error);
+    res.status(500).json({ error: 'Failed to download file: ' + error.message });
   }
 });
 

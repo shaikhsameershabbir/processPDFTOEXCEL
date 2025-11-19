@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
-import { Database, FileSpreadsheet, FileText, Home } from 'lucide-react';
+import { Database, FileSpreadsheet, FileText, Home, Scissors } from 'lucide-react';
 
 interface NavbarProps {
   currentPage?: string;
@@ -33,6 +33,12 @@ export function Navbar({ currentPage }: NavbarProps) {
       label: 'PDF to Excel',
       icon: FileText,
       description: 'Extract data from PDF files'
+    },
+    {
+      href: '/split-pdf',
+      label: 'Split PDF',
+      icon: Scissors,
+      description: 'Split PDF into smaller files'
     }
   ];
 
