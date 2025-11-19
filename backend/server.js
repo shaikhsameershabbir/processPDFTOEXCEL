@@ -1,11 +1,14 @@
-require('dotenv').config();
+const path = require('path');
+
+// Load environment variables from .env file
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const mysql = require('mysql2/promise');
 const csv = require('csv-parser');
 const fs = require('fs');
-const path = require('path');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const XLSX = require('xlsx');
@@ -18,11 +21,10 @@ const app = express();
 
 // Environment configuration with sensible defaults
 const {
-  PORT,
+  PORT = 4002,
   CORS_ORIGIN = '*',
   DB_HOST = 'localhost',
   DB_USER,
-
   DB_PASSWORD,
   DB_NAME, 
   DB_PORT,
@@ -663,7 +665,7 @@ app.post('/api/export-excel', async (req, res) => {
     // Define custom headers
     const headers = [
       'SERIAL_NO',
-      'DUPLICATE',  // Indicator column for duplicates
+      'DUPLICATE',
       'PRABHAG_NO',
       'PRABHAG_NO_EN',
       'PRABHAG_HEADER',
@@ -743,9 +745,13 @@ app.post('/api/export-excel', async (req, res) => {
         const dbRecord = record.db_data;
         const row = {};
         
+        // Extract DUPLICATE column from uploaded file if it exists
+        const duplicateFromFile = cleanText(findColumn(fileRecord, ['duplicate', 'DUPLICATE', 'Duplicate']) || '');
+        
         if (dbRecord && record.matched) {
           // Matched record
           row.SERIAL_NO = cleanText(findColumn(fileRecord, ['serial', 'serial_no', 'serialno', 'sr_no', 'srno', 'sno', 'sl_no', 'slno']) || record.index);
+          row.DUPLICATE = duplicateFromFile; // Preserve DUPLICATE from uploaded file
           const headerPrabhag = cleanText(findColumn(fileRecord, ['prabhag', 'प्रभाग']));
           const headerYadi = cleanText(findColumn(fileRecord, ['yadi_bhag', 'yadi', 'भाग']));
           const headerMatdan = cleanText(findColumn(fileRecord, ['matdar', 'मतदान', 'केंद्र']));
@@ -774,6 +780,7 @@ app.post('/api/export-excel', async (req, res) => {
         } else {
           // Unmatched record
           row.SERIAL_NO = cleanText(findColumn(fileRecord, ['serial', 'serial_no', 'serialno', 'sr_no', 'srno', 'sno', 'sl_no', 'slno']) || record.index);
+          row.DUPLICATE = duplicateFromFile; // Preserve DUPLICATE from uploaded file
           const headerPrabhag = cleanText(findColumn(fileRecord, ['prabhag', 'प्रभाग']));
           const headerYadi = cleanText(findColumn(fileRecord, ['yadi_bhag', 'yadi', 'भाग']));
           const headerMatdan = cleanText(findColumn(fileRecord, ['matdar', 'मतदान', 'केंद्र']));
@@ -821,11 +828,13 @@ app.post('/api/export-excel', async (req, res) => {
       }
     }
     
-    // Detect duplicates and add DUPLICATE column
+    // Detect duplicates and fill in DUPLICATE column if not present from file
     const serialCounts = new Map();
     excelData.forEach(row => {
       const serial = String(row.SERIAL_NO || '').trim();
-      serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
+      if (serial) {
+        serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
+      }
     });
     
     const duplicateSerials = new Set();
@@ -835,10 +844,12 @@ app.post('/api/export-excel', async (req, res) => {
       }
     });
     
-    // Add DUPLICATE indicator to each row
+    // Fill in DUPLICATE column if not already set from file
     excelData.forEach(row => {
       const serial = String(row.SERIAL_NO || '').trim();
-      row.DUPLICATE = duplicateSerials.has(serial) ? 'DUPLICATE' : '';
+      if (!row.DUPLICATE || row.DUPLICATE === '') {
+        row.DUPLICATE = duplicateSerials.has(serial) ? 'DUPLICATE' : '';
+      }
     });
     
     // Create Excel workbook
