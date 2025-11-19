@@ -208,11 +208,9 @@ export function FormatterApp() {
       } else if (data && Array.isArray(data.tables)) {
         setTables(data.tables.filter(Boolean))
       } else {
-        console.warn('Unexpected tables payload:', data)
         setTables([])
       }
     } catch (error) {
-      console.error('Failed to fetch tables:', error)
       setTables([])
     }
   }
@@ -240,7 +238,7 @@ export function FormatterApp() {
 
       setTableColumns(data)
     } catch (error) {
-      console.error('Failed to fetch table columns:', error)
+      // Error handled silently
     }
   }
 
@@ -287,19 +285,13 @@ export function FormatterApp() {
     const addr = (address.trim() || hintedAddress || "").trim()
     if (!voters.length) return
 
-    // Verify all voters are included (including duplicates)
-    console.log(`Exporting ${voters.length} voters to Excel (including all duplicates)`);
-    
-    // Count duplicates for verification
+    // Count duplicates for highlighting
     const serialCounts = new Map<string, number>();
     voters.forEach(v => {
       const serial = v.serial || '';
       serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
     });
     const duplicates = Array.from(serialCounts.entries()).filter(([_, count]) => count > 1);
-    if (duplicates.length > 0) {
-      console.log(`Export includes ${duplicates.length} duplicate serial numbers:`, duplicates.map(([serial, count]) => `${serial} (${count}x)`));
-    }
 
     // Custom field names as requested
     const header = [
@@ -331,12 +323,8 @@ export function FormatterApp() {
     
     // Include ALL voters - no filtering or deduplication
     // Map each voter to a row - this preserves ALL duplicates
-    const rows = voters.map((v, index) => {
+    const rows = voters.map((v) => {
       const isDuplicate = duplicateSerialsSet.has(v.serial || '');
-      // Debug: Log duplicates as we export
-      if (isDuplicate) {
-        console.log(`Exporting duplicate serial ${v.serial} at row ${index + 2} (header is row 1)`);
-      }
       return [
         v.serial || '',                                          // SERIAL_NO = Serial Number (preserve all duplicates)
         isDuplicate ? 'DUPLICATE' : '',                          // DUPLICATE = Indicator column
@@ -363,77 +351,37 @@ export function FormatterApp() {
       ];
     });
 
-    // Final verification: Count serial numbers in exported rows
-    const exportedSerialCounts = new Map<string, number>();
-    rows.forEach(row => {
-      const serial = row[0] || ''; // SERIAL_NO is first column
-      exportedSerialCounts.set(serial, (exportedSerialCounts.get(serial) || 0) + 1);
-    });
-    const exportedDuplicates = Array.from(exportedSerialCounts.entries()).filter(([_, count]) => count > 1);
-    
-    console.log(`📊 Excel Export Summary:`);
-    console.log(`   - Total rows: ${rows.length}`);
-    console.log(`   - Unique serial numbers: ${exportedSerialCounts.size}`);
-    if (exportedDuplicates.length > 0) {
-      console.log(`   - ✅ Duplicate serials in export: ${exportedDuplicates.length}`);
-      exportedDuplicates.forEach(([serial, count]) => {
-        console.log(`      Serial ${serial}: ${count} rows`);
-        // Check if serial 96 is in the export
-        if (serial === '96') {
-          console.log(`      ⚠️ Serial 96 found in export with ${count} occurrences`);
-        }
-      });
-    } else {
-      console.log(`   - ⚠️ No duplicate serials found in export (this might indicate a parsing issue)`);
-    }
-    
-    // Check specifically for serial 96
-    const serial96Rows = rows.filter(row => row[0] === '96');
-    if (serial96Rows.length > 0) {
-      console.log(`✅ Serial 96 found in export: ${serial96Rows.length} row(s)`);
-    } else {
-      console.log(`❌ Serial 96 NOT found in export - this indicates a parsing issue`);
-      console.log(`   Available serials in export:`, Array.from(exportedSerialCounts.keys()).slice(0, 20));
-    }
-
     const ws = utils.aoa_to_sheet([header, ...rows])
     
-    // Try to apply red background color to duplicate rows (if xlsx supports it)
+    // Apply red background color to duplicate rows
     if (duplicateSerialsSet.size > 0) {
       try {
-        // Get the range of the sheet
         const range = utils.decode_range(ws['!ref'] || 'A1');
         
-        // Iterate through all rows (skip header row 0)
         for (let rowIndex = 1; rowIndex <= range.e.r; rowIndex++) {
-          const row = rows[rowIndex - 1]; // rows array is 0-indexed
+          const row = rows[rowIndex - 1];
           const serial = row[0] || '';
           
           if (duplicateSerialsSet.has(serial)) {
-            // Apply red background to all cells in this row
             for (let colIndex = 0; colIndex <= range.e.c; colIndex++) {
               const cellAddress = utils.encode_cell({ r: rowIndex, c: colIndex });
               if (!ws[cellAddress]) {
                 ws[cellAddress] = { t: 's', v: '' };
               }
-              // Set cell style for red background
               ws[cellAddress].s = {
                 fill: {
-                  fgColor: { rgb: 'FFFF0000' } // Red background (BGR format)
+                  fgColor: { rgb: 'FFFF0000' }
                 },
                 font: {
-                  color: { rgb: 'FFFFFFFF' }, // White text
+                  color: { rgb: 'FFFFFFFF' },
                   bold: true
                 }
               };
             }
           }
         }
-        
-        console.log(`🎨 Applied red highlighting to ${duplicateSerialsSet.size} duplicate serial number(s)`);
       } catch (error) {
-        console.warn('Could not apply cell styling (xlsx library may not support it):', error);
-        console.log('Duplicate rows are marked with "DUPLICATE" in column B instead');
+        // Silently fail if styling is not supported
       }
     }
     
@@ -518,72 +466,18 @@ export function FormatterApp() {
         setProcessingStatus(status)
       }, concurrency)
 
-      // Save each page's OCR text to separate .txt files on the server
-      setProcessingStatus({
-        status: 'processing',
-        message: `Saving OCR text for each page...`,
-        progress: 75
-      })
-      
-      const savePromises = ocrResults.map(async (result, index) => {
-        const actualPageNumber = index + 1 + skipPagesStart; // Account for skipped pages
-        const filename = `page-${String(actualPageNumber).padStart(3, '0')}.txt`;
-        
-        try {
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/save-ocr-page-text`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              pageNumber: actualPageNumber,
-              text: result.text,
-              filename: filename
-            }),
-          });
-          
-          if (!response.ok) {
-            console.warn(`Failed to save text for page ${actualPageNumber}`);
-          } else {
-            const data = await response.json();
-            console.log(`Saved OCR text for page ${actualPageNumber}: ${data.filename}`);
-          }
-        } catch (error) {
-          console.error(`Error saving OCR text for page ${actualPageNumber}:`, error);
-        }
-      });
-      
-      await Promise.all(savePromises);
-      console.log(`All ${ocrResults.length} page texts saved to server`);
-
       const combinedText = combineOCRResults(ocrResults)
       const extractedHeader = tryExtractHeaderInfo(combinedText)
-      const rawAzureText = getRawOCRResults(ocrResults) // Get completely raw text
-      const rawApiResponses = getRawApiResponses(ocrResults) // Get raw API responses
+      const rawAzureText = getRawOCRResults(ocrResults)
+      const rawApiResponses = getRawApiResponses(ocrResults)
       setRaw(combinedText)
-      setRawAzureText(rawAzureText) // Store completely raw Azure text for debugging
-      setRawApiResponses(rawApiResponses) // Store raw API responses for debugging
+      setRawAzureText(rawAzureText)
+      setRawApiResponses(rawApiResponses)
 
       // Auto-format the extracted text
       const addr = extractedHeader?.booth || extractedHeader?.raw || tryExtractAddress(combinedText) || ""
       setAddress(addr)
       const parsedVoters = parseVoters(combinedText, addr)
-      
-      // Verify duplicates are preserved after parsing
-      const serialCounts = new Map<string, number>();
-      parsedVoters.forEach(v => {
-        const serial = v.serial || '';
-        serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
-      });
-      const duplicatesAfterParsing = Array.from(serialCounts.entries()).filter(([_, count]) => count > 1);
-      if (duplicatesAfterParsing.length > 0) {
-        console.log(`✅ Parsing preserved ${duplicatesAfterParsing.length} duplicate serial numbers:`, 
-          duplicatesAfterParsing.map(([serial, count]) => `${serial} (${count}x)`));
-        console.log(`Total voters parsed: ${parsedVoters.length} (including all duplicates)`);
-      } else {
-        console.log(`Total voters parsed: ${parsedVoters.length} (no duplicates found)`);
-      }
-      
       setVoters(parsedVoters)
 
       setProcessingStatus({
@@ -724,20 +618,6 @@ export function FormatterApp() {
     if (!voters.length) return null
 
     try {
-      // Verify all voters are included (including duplicates)
-      console.log(`Uploading ${voters.length} voters to server (including all duplicates)`);
-      
-      // Count duplicates for verification
-      const serialCounts = new Map<string, number>();
-      voters.forEach(v => {
-        const serial = v.serial || '';
-        serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
-      });
-      const duplicates = Array.from(serialCounts.entries()).filter(([_, count]) => count > 1);
-      if (duplicates.length > 0) {
-        console.log(`Upload includes ${duplicates.length} duplicate serial numbers:`, duplicates.map(([serial, count]) => `${serial} (${count}x)`));
-      }
-
       // Create Excel data with extracted and translated info
       const header = [
         "SERIAL_NO",
@@ -759,32 +639,25 @@ export function FormatterApp() {
         "GAN"
       ]
       // Include ALL voters - no filtering or deduplication
-      // Map each voter to a row - this preserves ALL duplicates
-      const rows = voters.map((v, index) => {
-        // Debug: Log duplicates as we upload
-        if (duplicates.some(([serial]) => serial === v.serial)) {
-          console.log(`Uploading duplicate serial ${v.serial} at row ${index + 2} (header is row 1)`);
-        }
-        return [
-          v.serial || '',                                          // SERIAL_NO = Serial Number (preserve all duplicates)
-          v.epic || '',
-          v.prabhag || '',
-          v.yadi || '',
-          v.matdarKendra || '',
-          v.booth || addr,
-          v.addressEnglish || '',
-          v.part || '',
-          v.nameEnglish || '',
-          v.name || '',
-          '',
-          v.relEnglish || '',
-          v.rel || '',
-          v.house || '',
-          v.age || '',
-          v.genderEnglish || v.genderMarathi || '',
-          v.gan || ''
-        ];
-      });
+      const rows = voters.map((v) => [
+        v.serial || '',
+        v.epic || '',
+        v.prabhag || '',
+        v.yadi || '',
+        v.matdarKendra || '',
+        v.booth || addr,
+        v.addressEnglish || '',
+        v.part || '',
+        v.nameEnglish || '',
+        v.name || '',
+        '',
+        v.relEnglish || '',
+        v.rel || '',
+        v.house || '',
+        v.age || '',
+        v.genderEnglish || v.genderMarathi || '',
+        v.gan || ''
+      ]);
 
       const ws = utils.aoa_to_sheet([header, ...rows])
       const wb = utils.book_new()
@@ -806,7 +679,6 @@ export function FormatterApp() {
       setTempExcelPath(data.filepath)
       return data.filepath
     } catch (error) {
-      console.error('Failed to upload extracted data:', error)
       alert('Failed to prepare data for matching. Please try again.')
       return null
     }
@@ -873,7 +745,6 @@ export function FormatterApp() {
       // Store cache file path for optimized export
       if (data.cacheFilePath) {
         setMatchCachePath(data.cacheFilePath)
-        console.log('💾 Match results cached for fast export:', data.cacheFilePath)
       }
 
       setProcessingStatus({
@@ -889,9 +760,6 @@ export function FormatterApp() {
         }
       }
       
-      if (data.hasMoreRecords) {
-        console.log('ℹ️ Showing first 100 records. Full data cached for export.')
-      }
     } catch (error) {
       setProcessingStatus({
         status: 'error',
