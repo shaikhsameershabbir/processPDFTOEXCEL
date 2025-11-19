@@ -821,21 +821,23 @@ app.post('/api/export-excel', async (req, res) => {
       }
     }
     
-    // Detect duplicate SERIAL_NO values
+    // Detect duplicates and add DUPLICATE column
     const serialCounts = new Map();
     excelData.forEach(row => {
-      const serial = row.SERIAL_NO || '';
+      const serial = String(row.SERIAL_NO || '').trim();
       serialCounts.set(serial, (serialCounts.get(serial) || 0) + 1);
     });
-    const duplicateSerials = new Set(
-      Array.from(serialCounts.entries())
-        .filter(([_, count]) => count > 1)
-        .map(([serial]) => serial)
-    );
+    
+    const duplicateSerials = new Set();
+    serialCounts.forEach((count, serial) => {
+      if (count > 1) {
+        duplicateSerials.add(serial);
+      }
+    });
     
     // Add DUPLICATE indicator to each row
     excelData.forEach(row => {
-      const serial = row.SERIAL_NO || '';
+      const serial = String(row.SERIAL_NO || '').trim();
       row.DUPLICATE = duplicateSerials.has(serial) ? 'DUPLICATE' : '';
     });
     
@@ -843,42 +845,6 @@ app.post('/api/export-excel', async (req, res) => {
     console.log(`📝 Creating Excel workbook with ${excelData.length} rows...`);
     const workbook = XLSX.utils.book_new();
     const worksheet = XLSX.utils.json_to_sheet(excelData, { header: headers });
-    
-    // Apply red background color to duplicate rows
-    if (duplicateSerials.size > 0) {
-      try {
-        const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1');
-        
-        for (let rowIndex = 1; rowIndex <= range.e.r; rowIndex++) {
-          const cellAddress = XLSX.utils.encode_cell({ r: rowIndex, c: 0 }); // SERIAL_NO column
-          const serialCell = worksheet[cellAddress];
-          if (serialCell && serialCell.v) {
-            const serial = String(serialCell.v).trim();
-            if (duplicateSerials.has(serial)) {
-              // Apply red background to all cells in this row
-              for (let colIndex = 0; colIndex <= range.e.c; colIndex++) {
-                const cellAddr = XLSX.utils.encode_cell({ r: rowIndex, c: colIndex });
-                if (!worksheet[cellAddr]) {
-                  worksheet[cellAddr] = { t: 's', v: '' };
-                }
-                worksheet[cellAddr].s = {
-                  fill: {
-                    fgColor: { rgb: 'FFFF0000' } // Red background
-                  },
-                  font: {
-                    color: { rgb: 'FFFFFFFF' }, // White text
-                    bold: true
-                  }
-                };
-              }
-            }
-          }
-        }
-      } catch (error) {
-        // Silently fail if styling is not supported
-      }
-    }
-    
     XLSX.utils.book_append_sheet(workbook, worksheet, 'Matched Data');
     
     // Generate Excel buffer
